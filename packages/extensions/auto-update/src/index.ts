@@ -37,6 +37,12 @@ export interface Config {
   remote?: string
   /** Local branch the remote branch is merged into. Defaults to `custom`. */
   branch?: string
+  /**
+   * Merge `origin/<branch>` into the local branch before merging upstream, so
+   * multi-machine forks converge (each machine pulls the other's pushed
+   * commits first). Defaults to true.
+   */
+  pullFork?: boolean
   /** Push the merged branch to `origin` after all gates pass. Defaults to true. */
   autoPush?: boolean
   /** Run `pnpm install` as a gate. Defaults to true. */
@@ -62,6 +68,7 @@ export const Config: z<Config> = z.object({
   intervalHours: z.number().default(24),
   remote: z.string().default('upstream'),
   branch: z.string().default('custom'),
+  pullFork: z.boolean().default(true),
   autoPush: z.boolean().default(true),
   gateInstall: z.boolean().default(true),
   gateBuild: z.boolean().default(true),
@@ -79,6 +86,7 @@ interface ResolvedOptions {
   readonly intervalHours: number
   readonly remote: string
   readonly branch: string
+  readonly pullFork: boolean
   readonly autoPush: boolean
   readonly gateInstall: boolean
   readonly gateBuild: boolean
@@ -102,6 +110,7 @@ function resolveOptions(config: Partial<Config>): ResolvedOptions {
     intervalHours: config.intervalHours ?? 24,
     remote: config.remote ?? 'upstream',
     branch: config.branch ?? 'custom',
+    pullFork: config.pullFork ?? true,
     autoPush: config.autoPush ?? true,
     gateInstall: config.gateInstall ?? true,
     gateBuild: config.gateBuild ?? true,

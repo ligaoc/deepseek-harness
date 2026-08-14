@@ -14,9 +14,12 @@
 
 1. 读取 `update/` 下最新的 `conflict-*.diff` 和 `conflict-*.json`，确定冲突文件清单。
 2. 确认当前在 `custom` 分支且工作区干净（`git status`）。如不干净，先处理或停下说明。
-3. 重新拉取并重放合并：`git fetch upstream`，然后 `git merge upstream/master`（不要用 `pull`、不要 `--ff-only`）。
+3. 重新拉取并重放合并。先看 `conflict-*.json` 的 `source` 字段：
+   - `source: "fork"`：冲突来自同步 fork（`origin/custom`，另一台电脑的提交与你的本地提交冲突）。执行 `git fetch origin` 然后 `git merge origin/custom`。
+   - `source: "upstream"`：冲突来自上游。执行 `git fetch upstream` 然后 `git merge upstream/master`。
+   （不要用 `pull`、不要 `--ff-only`。）
 4. 逐文件解决冲突：
-   - 冲突中 `<<<<<<< HEAD` 一侧是我的魔改，`>>>>>>> upstream/master` 一侧是上游新代码；两者都要保留时手工合并，上游删除/改名时以新拓扑为准。
+   - 冲突中 `<<<<<<< HEAD` 一侧是我的魔改（或本地提交），`>>>>>>>` 另一侧是引入方（`upstream/master` 或 `origin/custom`，见 `source` 字段）；两者都要保留时手工合并，引入方删除/改名时以新拓扑为准。
    - `pnpm-lock.yaml` 冲突不要手工拼：任取一侧后运行 `pnpm install` 重新生成。
    - 只解决 `conflict-*.json` 中列出的文件，不要顺手改动其他文件。
 5. 门禁验证，全部通过才算成功：

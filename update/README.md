@@ -14,8 +14,9 @@ custom     → 你的魔改分支（日常开发就在这上面）
 ## 日常同步（无冲突时）
 
 ```sh
+git fetch origin && git merge origin/custom    # 先同步 fork（另一台电脑的提交）
 git fetch upstream
-git merge upstream/master        # 在 custom 分支上执行
+git merge upstream/master                      # 再合并上游
 pnpm install
 pnpm run build
 pnpm run test
@@ -74,6 +75,16 @@ git log --oneline -20          # 找到要回退的提交
 git reset --hard <sha>         # custom 分支直接回退
 git push --force origin custom # 已推送过才需要（慎用，只推自己的 fork）
 ```
+
+## 多机同步（公司 + 家里）
+
+两台电脑都跑自动更新时，它每次会**先同步 fork 再合并上游**：`git fetch origin` 后若 `origin/custom` 领先（另一台电脑推过），先合并进来（冲突同样快照到 `update/conflict-*.diff` 并回滚），再 `git fetch upstream` 合并 `upstream/master`，最后跑门禁并推回 fork。两台机器最终收敛到同一状态。
+
+多机纪律：
+
+- **换机前先推送**：`git push origin custom`（自动更新要求工作区干净，未推送的提交不会自动被另一台机器知道）
+- 自动更新会把本地未推送的提交一起推上去——这是特性：改完代码 commit 后，下一次自动更新就帮你备份到 fork
+- 公司/家里的 fork 是唯一的同步中枢，不要只在本地提交不推送
 
 ## 常见问题
 

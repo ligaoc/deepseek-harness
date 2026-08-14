@@ -1,6 +1,6 @@
 # @deepseek-ai/dsh-auto-update
 
-应用内自动更新：按调度（启动检查 + 每日定时）从上游远程（`upstream`）拉取更新，把上游分支合并进自定义分支（`custom`），跑安装/构建/测试门禁，任一步失败即回滚到合并前提交；合并冲突先快照带冲突标记的 diff 再回滚；门禁全过后把合并结果推送到 fork。Web 界面通过 `autoUpdate` Remote 命名空间查询状态、触发检查，并接收 `auto-update/status` 事件。
+应用内自动更新：按调度（启动检查 + 每日定时）先同步 fork 的 `custom` 分支（多机场景下把另一台电脑推送的提交先合并进来），再从上游远程（`upstream`）拉取更新并把上游分支合并进自定义分支（`custom`），跑安装/构建/测试门禁，任一步失败即回滚到本次运行起点；合并冲突先快照带冲突标记的 diff 再回滚；门禁全过后把合并结果推送到 fork。Web 界面通过 `autoUpdate` Remote 命名空间查询状态、触发检查，并接收 `auto-update/status` 事件。
 
 ## 配置
 
@@ -12,6 +12,7 @@
 | `intervalHours` | `24` | 定时扫描间隔（小时） |
 | `remote` | `upstream` | 拉取更新的远程名 |
 | `branch` | `custom` | 合并目标分支 |
+| `pullFork` | `true` | 先合并 `origin/<branch>`（fork 同步）再合并上游；多机收敛靠它 |
 | `autoPush` | `true` | 门禁全过后推送到 `origin` |
 | `gateInstall` | `true` | 运行 `pnpm install` 门禁 |
 | `gateBuild` | `true` | 运行 `pnpm run build` 门禁 |
@@ -21,6 +22,16 @@
 | `repoDir` | 应用工作目录 | 仓库根目录 |
 | `logDir` | `<repoDir>/update` | 冲突快照与 status.json 目录 |
 | `proxyUrl` | 空 | git/pnpm 的可选代理 |
+
+## 多机同步（公司 + 家里）
+
+两台电脑都运行自动更新时，流水线顺序保证收敛：
+
+1. `git fetch origin`，若 `origin/custom` 领先则先合并（另一台电脑的提交落地；冲突同样快照 + 回滚）
+2. `git fetch upstream`，合并 `upstream/master`
+3. 门禁 → 推送到 fork
+
+每台机器都在同一 base（fork 最新 + 本地提交）上合并上游，最终一台机器的推送会带上全部改动。注意换机前先 `git push origin custom` 把本地提交推上去，另一台机器才能拉到；自动更新要求工作区干净，未提交改动会跳过本次检查。
 
 ## 服务
 
@@ -40,5 +51,6 @@ Remote 命名空间 `autoUpdate`（Web 客户端经 `ctx.remote.autoUpdate` 调�
 - 门禁失败回滚只复位 git 提交（`git reset --hard`），已变更的 `node_modules` 不会还原；下次 `pnpm install` 会收敛，但失败瞬间的依赖树可能偏离锁定文件。
 - 流水线阶段粒度是粗粒度的：远程查询期间快照只报告 `checking`，不细分 fetch/merge/install/build/test 各步。
 - 更新成功只提示重启生效，不自动重启应用进程（有意为之，避免中断会话）。
-- 推送失败时保留本地合并结果，只把阶段记为 `failed/push`，fork 落后于本地。
+- 推送失败时保留本地合并结果，只把阶段记为 `failed/push`，fork 落后于本地；多机场景下另一台机器要等这次推送成功才能拉到。
+- 两台机器各自合并上游会产生各自的 merge 提交（内容相同、sha 不同），历史里会有嵌套合并线；这是分布式开发的正常形态，`pullFork` 已把冲突面压到最小。
 - 定时器仅在应用运行期间生效；应用未启动时不会检查（启动时的 `checkOnStartup` 会补上）。
