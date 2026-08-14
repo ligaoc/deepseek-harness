@@ -1,7 +1,5 @@
 # @deepseek-ai/dsh-web-search-tavily
 
-English | [中文](README.zh.md)
-
 A [Tavily](https://tavily.com)-backed `WebSearchProvider` for the harness [web capability seam](../web/README.md) (`ctx.web`). It calls Tavily's `POST /search` endpoint and maps the flat `results[]` into the seam's normalized `WebSearchResult`.
 
 This is an **implementation** package: it registers a provider into `ctx.web`, it does not own the `ctx.web` key and it does not register a model-facing tool (that is `@deepseek-ai/dsh-tool-web`). It is a function/namespace plugin (`inject: ['web']`) that registers its backend.

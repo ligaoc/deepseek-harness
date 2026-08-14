@@ -1,7 +1,5 @@
 # @deepseek-ai/dsh-vision-bridge
 
-English | [中文](README.zh.md)
-
 An image-to-text bridge for the harness: when the target model cannot take images, this plugin degrades image blocks in the step messages to descriptions produced by a configured vision endpoint, so text-only models can still answer about attached images. It listens on the `agent/pre-step` waterfall — the same extension point `dsh-tool-skill` uses to inject skill content — so the loop is untouched: the session log keeps the original image blocks, and only the model-facing step messages carry the descriptions.
 
 This is an **implementation** package: a function/namespace plugin (`inject: ['attachments', 'llm']`) that transforms step messages before the model request. It is dormant until a vision endpoint is configured.
