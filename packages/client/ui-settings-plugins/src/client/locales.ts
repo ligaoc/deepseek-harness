@@ -11,6 +11,10 @@ export type PluginsSettingsLocaleKey =
   | 'webSearchTitle' | 'webSearchDescription'
   | 'webSearchApiKey' | 'webSearchApiKeyHint' | 'webSearchApiKeySet' | 'webSearchApiKeyUnset'
   | 'webSearchBaseUrl' | 'webSearchBaseUrlHint' | 'webSearchMaxUses' | 'webSearchMaxUsesHint'
+  | 'visionTitle' | 'visionDescription'
+  | 'visionApiKey' | 'visionApiKeyHint' | 'visionApiKeySet' | 'visionApiKeyUnset'
+  | 'visionBaseUrl' | 'visionBaseUrlHint' | 'visionModel' | 'visionModelHint'
+  | 'visionPrompt' | 'visionPromptHint'
 
 /** English copy. */
 export const en: Record<PluginsSettingsLocaleKey, string> = {
@@ -51,6 +55,18 @@ export const en: Record<PluginsSettingsLocaleKey, string> = {
   webSearchBaseUrlHint: 'Leave blank to use the provider default.',
   webSearchMaxUses: 'Max searches per request',
   webSearchMaxUsesHint: 'How many times one request may search before it must answer.',
+  visionTitle: 'Vision bridge',
+  visionDescription: 'Degrades images to descriptions when the model cannot take them.',
+  visionApiKey: 'Vision API key',
+  visionApiKeyHint: 'Stored outside the settings file. Leave blank to keep the current key.',
+  visionApiKeySet: 'A key is configured.',
+  visionApiKeyUnset: 'No key is configured; image degradation stays dormant.',
+  visionBaseUrl: 'Endpoint',
+  visionBaseUrlHint: 'OpenAI-compatible base URL, e.g. https://api.siliconflow.cn/v1.',
+  visionModel: 'Vision model',
+  visionModelHint: 'Model id accepted by the endpoint, e.g. Qwen/Qwen2.5-VL-7B-Instruct.',
+  visionPrompt: 'Description instruction',
+  visionPromptHint: 'Sent before the image; its output becomes the description.',
 }
 
 /** Simplified Chinese copy. */
@@ -92,4 +108,16 @@ export const zh: Record<PluginsSettingsLocaleKey, string> = {
   webSearchBaseUrlHint: '留空则使用提供方默认地址。',
   webSearchMaxUses: '单次请求最多搜索次数',
   webSearchMaxUsesHint: '一次请求在必须作答前最多可以搜索多少次。',
+  visionTitle: '视觉桥接',
+  visionDescription: '当模型不支持图片时，自动将图片降级为文字描述。',
+  visionApiKey: '视觉 API 密钥',
+  visionApiKeyHint: '存储在配置文件之外。留空则保留当前密钥。',
+  visionApiKeySet: '已配置密钥。',
+  visionApiKeyUnset: '未配置密钥，图片降级保持休眠。',
+  visionBaseUrl: '接口地址',
+  visionBaseUrlHint: 'OpenAI 兼容地址，例如 https://api.siliconflow.cn/v1。',
+  visionModel: '视觉模型',
+  visionModelHint: '端点接受的模型 id，例如 Qwen/Qwen2.5-VL-7B-Instruct。',
+  visionPrompt: '描述指令',
+  visionPromptHint: '发送在图片之前，其输出即成为图片描述。',
 }

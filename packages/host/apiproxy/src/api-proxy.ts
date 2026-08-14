@@ -124,7 +124,7 @@ const DEFAULT_MAX_MESSAGES = 50
  * is deferred work.
  */
 const WEB_SETTINGS_NAMESPACES = [
-  'agent-loop', 'shell', 'locale', 'permission', 'ui-conversation', 'ui-theme', 'web-search-deepseek',
+  'agent-loop', 'shell', 'locale', 'permission', 'ui-conversation', 'ui-theme', 'vision-bridge', 'web-search-deepseek',
 ] as const
 
 /** Provider work budget: at most 100 calls and 2,000 inspected hits. */
@@ -671,6 +671,15 @@ export interface ApiProxyDefaults {
 
 /** The tool/call payload fields the presenter path reads. */
 interface ToolCallData { callId: string; name: string; arguments: string }
+/**
+ * Activation query for an optional image-degradation bridge (`dsh-vision-bridge`
+ * provides it as the `imageDegradation` service). Absent or inactive, image
+ * admission preflights refuse images for models that declare no image modality.
+ */
+interface ImageDegradationService {
+  /** True when the bridge can describe images right now. */
+  isActive(): Promise<boolean>
+}
 /**
  * One outstanding approval question: the stable server-request id, the frame
  * material replayed to late mux subscribers, and the resolver that settles the
@@ -2297,11 +2306,17 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             if (pendingImage || messagesHaveImage(found.agent.session.deriveMessages())) {
               const info = await ctx.llm.resolveModelInfo(resolved.provider, resolved.model)
               if (info.inputModalities !== undefined && !info.inputModalities.includes('image')) {
-                return err(request, {
-                  code: 'model-unavailable',
-                  message: `Model "${resolved.model}" does not accept image input, but this session already contains images; select an image-capable model.`,
-                  details: { provider, model },
-                })
+                // An active image-degradation bridge makes the switch safe: the
+                // existing images degrade to descriptions instead of reaching
+                // a model that refuses them.
+                const degradation = ctx.get('imageDegradation') as ImageDegradationService | undefined
+                if (degradation === undefined || !(await degradation.isActive())) {
+                  return err(request, {
+                    code: 'model-unavailable',
+                    message: `Model "${resolved.model}" does not accept image input, but this session already contains images; select an image-capable model.`,
+                    details: { provider, model },
+                  })
+                }
               }
             }
             const selected: ModelSelection = {
@@ -2486,11 +2501,17 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
               const current = selectionFor(agent).current
               const modelInfo = await ctx.llm.resolveModelInfo(current.provider, current.model)
               if (modelInfo.inputModalities !== undefined && !modelInfo.inputModalities.includes('image')) {
-                return err(request, {
-                  code: 'attachment-error',
-                  message: `Model "${current.model}" does not support image input.`,
-                  details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
-                })
+                // An active image-degradation bridge (`dsh-vision-bridge`)
+                // admits the image: its `agent/pre-step` listener replaces the
+                // blocks with descriptions before the model request.
+                const degradation = ctx.get('imageDegradation') as ImageDegradationService | undefined
+                if (degradation === undefined || !(await degradation.isActive())) {
+                  return err(request, {
+                    code: 'attachment-error',
+                    message: `Model "${current.model}" does not support image input.`,
+                    details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+                  })
+                }
               }
             }
             const durable = await durablePromptContent(ctx, content)

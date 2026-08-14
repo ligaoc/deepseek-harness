@@ -6,6 +6,22 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { LlmCallConfig, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 
+/** Live selections keyed by the agent context that installed them. */
+const selections = new WeakMap<Context, ModelSelectionRef>()
+
+/**
+ * Read the live selection installed on one agent's scoped context.
+ * Agent-scoped listeners (for example a pre-step image bridge) use this to
+ * judge the same model the host admission check just used, instead of a
+ * creation-time options snapshot. Absent when no entry point installed a
+ * selection (a deployment that never calls {@link installModelSelection}).
+ * @param agentCtx - the agent's scoped context.
+ * @returns the live selection, or undefined when none is installed.
+ */
+export function agentModelSelection(agentCtx: Context): ModelSelectionRef | undefined {
+  return selections.get(agentCtx)
+}
+
 /** Complete provider, model, and optional reasoning effort selected for one live Agent. */
 export interface ModelSelection {
   /** Registered provider route. */
@@ -32,11 +48,17 @@ export interface ModelSelectionRef {
  * surfaces. An absent selected effort clears any inherited effort, restoring
  * the selected model's provider/default behavior.
  *
+ * The selection is also recorded against the agent context ({@link
+ * agentModelSelection}), so agent-scoped listeners (for example a pre-step
+ * image bridge) read the same value the admission check just used, instead of
+ * a creation-time snapshot.
+ *
  * @param agentCtx - The selected Agent's scoped context.
  * @param selection - Mutable selection owned by the calling entry point.
  * @returns Disposer for both scoped waterfall listeners.
  */
 export function installModelSelection(agentCtx: Context, selection: ModelSelectionRef): () => void {
+  selections.set(agentCtx, selection)
   const disposeAssembly = agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {
     const selected = selection.current
     const assembled = await next()

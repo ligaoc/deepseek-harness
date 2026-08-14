@@ -38,3 +38,17 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
+
+# local build/log artifacts (never part of the 魔改 baseline)
+build.log
+install.log
+web.log
+# tsc emit leaked into src (artifacts, regenerate on build)
+packages/credentials/credentials/src/*.js
+packages/credentials/credentials/src/*.js.map
+packages/credentials/credentials/src/*.d.ts
+packages/credentials/credentials/src/*.d.ts.map
+packages/settings/settings/src/*.js
+packages/settings/settings/src/*.js.map
+packages/settings/settings/src/*.d.ts
+packages/settings/settings/src/*.d.ts.map

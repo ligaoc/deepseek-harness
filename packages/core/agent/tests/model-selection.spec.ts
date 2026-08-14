@@ -3,6 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import {
   agentEvents,
+  agentModelSelection,
   installModelSelection,
   type Agent,
   type ModelSelectionRef,
@@ -57,5 +58,15 @@ describe('installModelSelection()', () => {
       'agent/request', { turn: 2, step: 0, signal }, () => Promise.resolve(seed),
     )).resolves.toBe(seed)
     await ctx.fiber.dispose()
+  })
+
+  it('records the live selection against the agent context', () => {
+    const ctx = new Context()
+    const selection: ModelSelectionRef = { current: { provider: 'p', model: 'm' }, assembled: undefined }
+    const dispose = installModelSelection(ctx, selection)
+    expect(agentModelSelection(ctx)).toBe(selection)
+    dispose()
+    expect(agentModelSelection(ctx)).toBe(selection)
+    expect(agentModelSelection(new Context())).toBeUndefined()
   })
 })
