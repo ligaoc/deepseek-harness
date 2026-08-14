@@ -15,6 +15,9 @@ export type PluginsSettingsLocaleKey =
   | 'visionApiKey' | 'visionApiKeyHint' | 'visionApiKeySet' | 'visionApiKeyUnset'
   | 'visionBaseUrl' | 'visionBaseUrlHint' | 'visionModel' | 'visionModelHint'
   | 'visionPrompt' | 'visionPromptHint'
+  | 'autoUpdateTitle' | 'autoUpdateDescription'
+  | 'autoUpdateStatus' | 'autoUpdateLastCheck' | 'autoUpdateBehind' | 'autoUpdateNever'
+  | 'autoUpdateCheckNow' | 'autoUpdateChecking' | 'autoUpdateRestartHint' | 'autoUpdateConflictHint'
 
 /** English copy. */
 export const en: Record<PluginsSettingsLocaleKey, string> = {
@@ -67,6 +70,16 @@ export const en: Record<PluginsSettingsLocaleKey, string> = {
   visionModelHint: 'Model id accepted by the endpoint, e.g. Qwen/Qwen2.5-VL-7B-Instruct.',
   visionPrompt: 'Description instruction',
   visionPromptHint: 'Sent before the image; its output becomes the description.',
+  autoUpdateTitle: 'Auto update',
+  autoUpdateDescription: 'Scheduled upstream sync with conflict rollback.',
+  autoUpdateStatus: 'Status',
+  autoUpdateLastCheck: 'Last check',
+  autoUpdateBehind: 'Commits behind',
+  autoUpdateNever: 'Never',
+  autoUpdateCheckNow: 'Check now',
+  autoUpdateChecking: 'Checking…',
+  autoUpdateRestartHint: 'Update complete; restart the app to apply.',
+  autoUpdateConflictHint: 'Merge conflict rolled back. Copy update/CONFLICT_PROMPT.md to a model to resolve it.',
 }
 
 /** Simplified Chinese copy. */
@@ -120,4 +133,14 @@ export const zh: Record<PluginsSettingsLocaleKey, string> = {
   visionModelHint: '端点接受的模型 id，例如 Qwen/Qwen2.5-VL-7B-Instruct。',
   visionPrompt: '描述指令',
   visionPromptHint: '发送在图片之前，其输出即成为图片描述。',
+  autoUpdateTitle: '自动更新',
+  autoUpdateDescription: '定时从上游同步更新，冲突自动回滚。',
+  autoUpdateStatus: '状态',
+  autoUpdateLastCheck: '上次检查',
+  autoUpdateBehind: '落后提交',
+  autoUpdateNever: '从未',
+  autoUpdateCheckNow: '立即检查',
+  autoUpdateChecking: '检查中…',
+  autoUpdateRestartHint: '更新完成，重启应用后生效。',
+  autoUpdateConflictHint: '合并冲突已回滚。把 update/CONFLICT_PROMPT.md 复制给大模型即可解决冲突。',
 }

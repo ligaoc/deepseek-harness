@@ -277,6 +277,7 @@
     { "path": "./packages/guard/repeat-tool-reminder" },
     { "path": "./packages/extensions/cordis-host-runner" },
     { "path": "./packages/extensions/vision-bridge" },
+    { "path": "./packages/extensions/auto-update" },
     { "path": "./packages/extensions/tool-cordis" },
     { "path": "./packages/hooks/hook-protocol" },
     { "path": "./packages/hooks/hooks-claude-code" },

@@ -5,18 +5,23 @@ title DeepSeek Harness Launcher
 rem ============================================================
 rem  DeepSeek Harness (dsh) Web UI launcher
 rem
-rem  Default flow (no args):
-rem    - checks for updates automatically (via 7897 proxy, falls
-rem      back to direct), starts without asking when up to date
-rem    - asks once when new commits exist: update + redeploy now?
-rem    - on a pull conflict the update ROLLS BACK to the version
-rem      before the pull; local changes are preserved in git stash
-rem    - then kills the old process on WEB_PORT and starts the UI
+rem  Topology (since the fork split):
+rem    origin   -> your fork (ligaoc/deepseek-harness)
+rem    upstream -> upstream project (deepseek-ai/deepseek-harness)
+rem    master   -> clean, tracks upstream (use GitHub "Sync fork")
+rem    custom   -> your customizations (daily work lives here)
+rem
+rem  The in-app auto-update plugin owns scheduled syncs (startup
+rem  check + daily scan with install/build/test gates, conflict
+rem  snapshots in update\conflict-*.diff). This launcher only:
+rem    - default: starts without asking (plugin handles updates)
+rem    - -u: force a manual update now (merge upstream/master into
+rem          the current branch with rollback), then start
 rem
 rem  Usage:
-rem    start-dsh.bat            auto-check update, ask if any, start
-rem    start-dsh.bat -s         skip update check, start directly
-rem    start-dsh.bat -u         force update (no prompt), then start
+rem    start-dsh.bat            start directly (plugin checks updates)
+rem    start-dsh.bat -s         same as default (kept for compatibility)
+rem    start-dsh.bat -u         force manual update, then start
 rem
 rem  Configurable below: WEB_PORT / PROXY_URL / OPEN_BROWSER
 rem ============================================================
@@ -41,23 +46,13 @@ if /i "%~1"=="--start" set "MODE=skip"
 if /i "%~1"=="-u" set "MODE=force"
 if /i "%~1"=="--update" set "MODE=force"
 
-if "%MODE%"=="skip" goto :do_start
-
-rem ---------- auto mode: check, ask only when updates exist ----------
-if "%MODE%"=="auto" (
-    call :check_update
+rem ---------- force mode: manual update (merge upstream into current branch) ----------
+if "%MODE%"=="force" (
+    call :update
     if errorlevel 1 (
-        echo [INFO] Update not applied, continuing with the current version
+        echo [WARN] Update failed or was rolled back; starting anyway
     )
-    goto :do_start
 )
-
-rem ---------- force mode: update without asking ----------
-call :update
-if errorlevel 1 (
-    echo [WARN] Update failed or was rolled back; starting anyway
-)
-goto :do_start
 
 rem ---------- kill old process then start ----------
 :do_start
@@ -66,75 +61,43 @@ call :launch
 exit /b 0
 
 rem ============================================================
-rem  Sub: check for updates via proxy, ask once when new commits exist
-rem ============================================================
-:check_update
-call :setup_proxy
-echo [UPDATE] Fetching remote repo ...
-git -c http.proxy=%PROXY_URL% -c https.proxy=%PROXY_URL% fetch origin 2>&1
-if errorlevel 1 (
-    git fetch origin 2>&1
-    if errorlevel 1 (
-        echo   [INFO] Cannot reach GitHub, skipping update
-        exit /b 1
-    )
-)
-
-rem shallow clone: fetch full history once (optional, non-fatal)
-for /f "delims=" %%v in ('git rev-parse --is-shallow-repository 2^>nul') do set "IS_SHALLOW=%%v"
-if /i "!IS_SHALLOW!"=="true" (
-    echo [UPDATE] Shallow clone detected, fetching full history ...
-    git -c http.proxy=%PROXY_URL% -c https.proxy=%PROXY_URL% fetch --unshallow origin >nul 2>&1
-)
-
-set "BEHIND=0"
-for /f "delims=" %%n in ('git rev-list --count HEAD..origin/master 2^>nul') do set "BEHIND=%%n"
-if "!BEHIND!"=="0" (
-    echo [UPDATE] Already up to date
-    exit /b 0
-)
-
-echo.
-echo [UPDATE] %BEHIND% new commit(s) available on GitHub.
-set /p "ANS=Update and redeploy now? [Y/N] "
-if /i "!ANS!"=="Y" (
-    call :update
-    exit /b !errorlevel!
-)
-echo [INFO] Update skipped
-exit /b 1
-
-rem ============================================================
-rem  Sub: update + redeploy, rolling back on pull conflict
+rem  Sub: manual update + redeploy, rolling back on merge conflict
 rem ============================================================
 :update
 call :setup_proxy
-echo [UPDATE] Fetching remote repo ...
-git -c http.proxy=%PROXY_URL% -c https.proxy=%PROXY_URL% fetch origin 2>&1
+echo [UPDATE] Fetching upstream ...
+git -c http.proxy=%PROXY_URL% -c https.proxy=%PROXY_URL% fetch upstream 2>&1
 if errorlevel 1 (
-    git fetch origin 2>&1
+    git fetch upstream 2>&1
     if errorlevel 1 (
         echo   [ERROR] Cannot reach GitHub
         exit /b 1
     )
 )
 
+rem require a clean tree: merge refuses to run otherwise
+set "DIRTY="
+for /f "delims=" %%s in ('git status --porcelain') do set "DIRTY=1"
+if defined DIRTY (
+    echo   [ERROR] Working tree is dirty. Commit or stash first, then retry.
+    exit /b 1
+)
+
 rem remember where we were, for rollback
 set "ORIG_HEAD="
 for /f "delims=" %%h in ('git rev-parse HEAD 2^>nul') do set "ORIG_HEAD=%%h"
 
-echo [UPDATE] Pulling ...
-git pull --ff-only origin master 2>&1
+echo [UPDATE] Merging upstream/master ...
+git merge upstream/master 2>&1
 if errorlevel 1 (
-    echo [UPDATE] Pull conflict detected, rolling back ...
-    rem save every tracked local change into stash; untracked files are
-    rem left in place (pull never touches them) and the script survives
-    git stash push -m "dsh auto-update rollback" >nul 2>&1
-    if defined ORIG_HEAD git reset --hard %ORIG_HEAD% >nul 2>&1
-    echo   [INFO] Rolled back to the previous version. Your local changes are
-    echo          preserved in git stash:
-    echo        git stash list
-    echo        git stash pop   -- resolve conflicts with another model
+    echo [UPDATE] Merge conflict detected, snapshotting and rolling back ...
+    for /f "delims=" %%t in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"') do set "STAMP=%%t"
+    if not exist update mkdir update
+    git diff > "update\conflict-%STAMP%.diff" 2>nul
+    git merge --abort >nul 2>&1
+    echo   [INFO] Rolled back to %ORIG_HEAD%.
+    echo   [INFO] Conflict snapshot: update\conflict-%STAMP%.diff
+    echo   [INFO] Hand it to a model together with update\CONFLICT_PROMPT.md
     exit /b 1
 )
 
@@ -147,12 +110,27 @@ if errorlevel 1 (
     set "npm_config_proxy="
     set "npm_config_https_proxy="
     call pnpm install 2>&1
-    if errorlevel 1 exit /b 1
+    if errorlevel 1 (
+        echo   [INFO] Gate failed, rolling back to %ORIG_HEAD% ...
+        git reset --hard %ORIG_HEAD% >nul 2>&1
+        exit /b 1
+    )
 )
 
 echo [UPDATE] Rebuilding (pnpm run build) ...
 call pnpm run build 2>&1
-if errorlevel 1 exit /b 1
+if errorlevel 1 (
+    echo   [INFO] Gate failed, rolling back to %ORIG_HEAD% ...
+    git reset --hard %ORIG_HEAD% >nul 2>&1
+    exit /b 1
+)
+
+echo [UPDATE] Pushing to your fork ...
+git push origin custom 2>&1
+if errorlevel 1 (
+    echo   [WARN] Push failed; the local merge is kept, push later with:
+    echo        git push origin custom
+)
 
 echo [DONE] Update finished. Current version:
 git log -1 --oneline
@@ -214,6 +192,7 @@ echo       URL: http://127.0.0.1:%WEB_PORT%
 echo       NOTE: cold start takes ~30-60s before the page responds,
 echo             do not panic if the port is not up yet
 echo       Vision bridge: configure in Web UI Settings > Plugins (or env vars)
+echo       Auto update: configure in Web UI Settings > Plugins (or update\README.md)
 echo.
 if "%OPEN_BROWSER%"=="1" (
     rem wait ~10s for the service, then open browser

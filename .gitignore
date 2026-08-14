@@ -52,3 +52,7 @@ packages/settings/settings/src/*.js
 packages/settings/settings/src/*.js.map
 packages/settings/settings/src/*.d.ts
 packages/settings/settings/src/*.d.ts.map
+
+# auto-update artifacts (conflict snapshots + status; prompt/runbook stay tracked)
+update/conflict-*
+update/status.json

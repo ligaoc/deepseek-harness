@@ -21,6 +21,7 @@ import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: the ctx.remote Context merge and the forwarded-event key face.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import { AgentLoopCard } from './AgentLoopCard.tsx'
+import { AutoUpdateCard } from './AutoUpdateCard.tsx'
 import { BashCard } from './BashCard.tsx'
 import { ConfigurablePluginsTab } from './ConfigurablePluginsTab.tsx'
 import type { ConfigurablePluginsTabInjected } from './ConfigurablePluginsTab.tsx'
@@ -29,6 +30,7 @@ import type { PluginsSettingsSectionInjected, PluginsSettingsTabEntry } from './
 import { VisionBridgeCard } from './VisionBridgeCard.tsx'
 import { WebSearchCard } from './WebSearchCard.tsx'
 import { AGENT_LOOP_NS, AgentLoopCardController } from './agent-loop-card-controller.ts'
+import { AutoUpdateCardController } from './auto-update-card-controller.ts'
 import { SHELL_NS, BashCardController } from './bash-card-controller.ts'
 import { VISION_NS, VisionBridgeCardController } from './vision-bridge-card-controller.ts'
 import { WEB_SEARCH_NS, WebSearchCardController } from './web-search-card-controller.ts'
@@ -43,6 +45,7 @@ export type {
   CardActions, CardFieldSpec, CardFieldState, CardSecretSpec, CardShell,
 } from './card-form.ts'
 export type { AgentLoopCardFace, AgentLoopCardState } from './agent-loop-card-controller.ts'
+export type { AutoUpdateCardFace, AutoUpdateCardState } from './auto-update-card-controller.ts'
 export type { BashCardFace, BashCardState } from './bash-card-controller.ts'
 export type { VisionBridgeCardFace, VisionBridgeCardState } from './vision-bridge-card-controller.ts'
 export type { WebSearchCardFace, WebSearchCardState } from './web-search-card-controller.ts'
@@ -66,6 +69,11 @@ export function apply(ctx: ClientContext): void {
   const agentLoop = new AgentLoopCardController(ctx.settingsScope.bind({ namespace: AGENT_LOOP_NS }))
   const webSearch = new WebSearchCardController(ctx.settingsScope.bind({ namespace: WEB_SEARCH_NS }), api)
   const vision = new VisionBridgeCardController(ctx.settingsScope.bind({ namespace: VISION_NS }), api)
+  const autoUpdate = new AutoUpdateCardController({
+    status: () => ctx.remote.autoUpdate.status(),
+    check: () => ctx.remote.autoUpdate.check(),
+    onStatus: listener => ctx.remote.$on('auto-update/status', listener),
+  })
 
   // The credential a card reports is not part of any settings section, so its
   // scope publishes nothing when one is written. This is the only signal that
@@ -73,6 +81,12 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(
     () => ctx.remote.$on('credentials/updated', (ref) => { webSearch.refreshCredential(ref); vision.refreshCredential(ref) }),
     'ui-settings-plugins: credential invalidations',
+  )
+
+  // Host update phases arrive as forwarded events; the card re-projects them.
+  ctx.effect(
+    () => autoUpdate.subscribe(),
+    'ui-settings-plugins: auto-update status events',
   )
 
   let tabsVersion = -1
@@ -165,5 +179,12 @@ export function apply(ctx: ClientContext): void {
       locale: NS,
       inject: () => vision.inject(),
     }, VisionBridgeCard)
+    yield ctx.slots.register({
+      name: 'settings.plugin.item',
+      id: 'auto-update',
+      order: 40,
+      locale: NS,
+      inject: () => autoUpdate.inject(),
+    }, AutoUpdateCard)
   })
 }

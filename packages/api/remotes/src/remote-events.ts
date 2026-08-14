@@ -16,6 +16,7 @@
  */
 export const API_REMOTE_FORWARDED_EVENTS = [
   'agent-preset/selected',
+  'auto-update/status',
   'commands/change',
   'credentials/updated',
   'cordis/request-run',
