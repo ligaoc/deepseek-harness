@@ -32,6 +32,67 @@ git push origin custom         # 换机前必做
 
 插件 `@deepseek-ai/dsh-auto-update`（设置 > 插件 > 自动更新）在启动时和每日定时执行 fork-first 同步：先合并 `origin/custom`（另一台机器的提交），再合并 `upstream/master`，跑 install/build/test 门禁，全过后推回 fork。手动路径见 [update/README.md](../update/README.md)。
 
+自动更新完整流程：
+
+```text
+触发源（三选一）：① 启动后 20 秒  ② 每日定时（默认 24h）  ③ 设置页「立即检查」
+
+前置检查
+  当前分支 == custom ? ──否──▶ 跳过「当前分支 X，期望 custom」
+  工作区干净（无未提交改动）? ──否──▶ 跳过「工作区有未提交改动」
+  记录 rollbackSha = 当前 HEAD（门禁失败的回滚基准）
+
+阶段一：同步 fork
+  git fetch origin
+  origin/custom 存在且领先（本地落后）?
+    ├─ 否 ─▶ 跳过
+    └─ 是 ─▶ git merge origin/custom
+               ├─ 冲突 ─▶ 快照 conflict-*.diff（meta: source="fork"）
+               │           git merge --abort ──▶ 结束【冲突】
+               └─ 成功 ─▶ 标记「合并过东西」
+
+阶段二：同步上游
+  git fetch upstream
+  HEAD..upstream/master 有新提交?
+    ├─ 否 ─▶ 跳过
+    └─ 是 ─▶ git merge upstream/master
+               ├─ 冲突 ─▶ 快照 conflict-*.diff（meta: source="upstream"）
+               │           git merge --abort ──▶ 结束【冲突】
+               └─ 成功 ─▶ 标记「合并过东西」
+
+两个阶段都没合并任何东西? ──是──▶ 结束【已是最新】
+
+更新门禁（三步全过才算成功；任一步失败：
+  git reset --hard 回滚到运行起点 ──▶ 结束【失败】）
+  ① pnpm install  ② pnpm run build  ③ pnpm run test
+
+git push origin custom（合并结果 + 本地未推送提交一起推回 fork）
+  失败 ─▶ 结束【失败/推送】——本地合并保留，fork 落后，下次再推
+
+结束【更新完成】──▶ 弹窗「更新完成，请重启应用生效」
+```
+
+每个阶段变化都会发 `auto-update/status` 事件，Web 设置页卡片实时显示状态（检查中 / 已是最新 / 更新完成 / 合并冲突 / 失败 + 冲突日志路径）。
+
+多机收敛（公司 + 家里都跑自动更新）：
+
+```text
+公司电脑                          fork (origin)                      家里电脑
+   │── 改代码 → commit ─────────────▶│                                  │
+   │── 自动更新① fetch origin ──────▶│                                  │
+   │── 自动更新② merge upstream ────▶│                                  │
+   │── 门禁通过 push ───────────────▶│                                  │
+   │                                │── 家里自动更新① fetch origin ─────▶│
+   │                                │    origin/custom 领先（公司的      │
+   │                                │    提交）──▶ merge 进来             │
+   │                                │◀── 家里② merge upstream ──────────│
+   │                                │◀── 家里门禁通过 push ──────────────│
+   │── 公司下次自动更新① fetch ─────▶│                                  │
+   │    origin/custom 领先（家里的    │                                  │
+   │    提交）──▶ merge 进来          │                                  │
+   └────────── 两边最终都包含：双方提交 + 最新上游 ──────────┘
+```
+
 ## 合并冲突
 
 自动更新合并冲突时会：快照带冲突标记的 diff 到 `update/conflict-<时间戳>.diff`（同名 `.json` 含 `source: "fork" | "upstream"`、冲突文件清单）→ `git merge --abort` 回滚 → 应用保持可用。解决方式：
