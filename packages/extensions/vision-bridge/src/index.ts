@@ -26,7 +26,6 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-session/types'
 import z from '@deepseek-ai/schemastery'
 
 /** Service name under which the bridge publishes its activation query. */
@@ -53,23 +52,6 @@ export const DEFAULT_API_KEY_ENV = 'VISION_API_KEY'
 
 /** Default directory under the session workspace that archived images are written to. */
 export const DEFAULT_BASE_DIR = '.dsh-images'
-
-/**
- * One archived image: which attachment was saved to the workspace and where.
- */
-export interface VisionArchiveEventData {
-  /** The content-addressed attachment id that was archived. */
-  attachmentId: string
-  /** Workspace-relative path the model can hand to a vision skill. */
-  path: string
-}
-
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    /** Logged image-to-file archiving; the model request is reconstructable from the log. */
-    'vision/archive': VisionArchiveEventData
-  }
-}
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'vision-bridge'
@@ -122,8 +104,6 @@ function resolveOptions(config: Config): ResolvedBridge {
 export interface ArchiveResult {
   /** The messages with image blocks replaced by path-bearing text. */
   messages: readonly UserMessage[]
-  /** One event per archived image, for the session log. */
-  events: VisionArchiveEventData[]
 }
 
 /**
@@ -147,7 +127,6 @@ export async function archiveImages(
   signal?: AbortSignal,
 ): Promise<ArchiveResult> {
   let changed = false
-  const events: VisionArchiveEventData[] = []
   const result: UserMessage[] = []
   for (const message of messages) {
     if (!contentHasImage(message.content)) {
@@ -165,7 +144,6 @@ export async function archiveImages(
       }
       changed = true
       index += 1
-      const attachmentId = String(block.attachment.attachmentId)
       try {
         const stored = await readImage(block, signal)
         const path = await archive(stored, signal)
@@ -175,14 +153,13 @@ export async function archiveImages(
           ? `[用户上传的图片已保存到 ${path}（二进制，模型无法直接读取；如需查看请调用 vision 技能识别该文件）]`
           : `[用户上传的图片（第 ${index}/${imageCount} 张）已保存到 ${path}（二进制，模型无法直接读取；如需查看请调用 vision 技能识别该文件）]`
         blocks.push({ type: 'text', text: label })
-        events.push({ attachmentId, path })
       } catch (error: unknown) {
         blocks.push({ type: 'text', text: `[图片保存失败: ${String(error)}]` })
       }
     }
     result.push({ ...message, content: blocks })
   }
-  return changed ? { messages: result, events } : { messages, events }
+  return changed ? { messages: result } : { messages }
 }
 
 /** Register the pre-step listener that degrades images for non-vision models. */
@@ -238,16 +215,17 @@ export function apply(ctx: Context, config: Config): void {
         const dir = join(cwd ?? process.cwd(), resolved.baseDir)
         await mkdir(dir, { recursive: true })
         const ext = extensionOf(image.ref.mediaType)
-        const file = join(dir, `${String(image.ref.attachmentId)}.${ext}`)
+        // Attachment ids carry a `sha256:` prefix; `:` is illegal in Windows
+        // file names (NTFS would store the bytes as an alternate data stream),
+        // so the id is sanitized before it becomes a file name.
+        const safeId = String(image.ref.attachmentId).replace(/[^a-zA-Z0-9_-]/g, '_')
+        const file = join(dir, `${safeId}.${ext}`)
         await writeFile(file, image.data)
         return file
       },
       signal,
     )
     if (archived.messages === decision.messages) return decision
-    for (const event of archived.events) {
-      agent.session.append('vision/archive', event)
-    }
     // readonly is compile-time only; the array is a fresh mutable build or the
     // original mutable instance, so the cast is safe at runtime.
     return { kind: 'enter', messages: archived.messages as UserMessage[] }

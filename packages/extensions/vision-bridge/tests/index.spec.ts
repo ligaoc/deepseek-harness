@@ -1,9 +1,13 @@
 /**
- * `dsh-vision-bridge` behavior: the `imageDegradation` activation service,
- * the `agent/pre-step` degradation itself, and the model-selection source
- * (the agent-scoped `modelSelection` service, never the options snapshot).
+ * `dsh-vision-bridge` behavior: the `imageDegradation` activation service and
+ * the `agent/pre-step` archiving itself — image blocks are written to the
+ * workspace and replaced by path-bearing text, judged by the agent-scoped
+ * model selection (never the options snapshot).
  */
 
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
@@ -21,7 +25,7 @@ function imageMessage(content: Array<{ type: 'image' | 'text'; text?: string }>)
     role: 'user',
     source: { kind: 'user' },
     content: content.map(block => block.type === 'image'
-      ? { type: 'image', attachment: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 1, width: 1, height: 1 } }
+      ? { type: 'image', attachment: { attachmentId: 'sha256:att-1', mediaType: 'image/png', bytes: 1, width: 1, height: 1 } }
       : { type: 'text', text: block.text ?? '' }),
   } as UserMessage
 }
@@ -41,16 +45,7 @@ async function runPreStep(
 }
 
 /** Register the bridge plus minimal host services; returns the live selection. */
-async function harness(config: {
-  apiKey?: string
-  baseURL?: string
-  model?: string
-}): Promise<{
-  ctx: Context
-  agent: Agent
-  selection: ModelSelectionRef
-  append: ReturnType<typeof vi.fn>
-}> {
+async function harness(): Promise<{ ctx: Context; agent: Agent; selection: ModelSelectionRef; cwd: string }> {
   const ctx = new Context()
   ctx.provide('llm', {
     resolveModelInfo: vi.fn(() => Promise.resolve({
@@ -59,26 +54,21 @@ async function harness(config: {
   } as never)
   ctx.provide('attachments', {
     readImage: vi.fn(() => Promise.resolve({
-      ref: { attachmentId: 'att-1', mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
-      data: Uint8Array.of(1),
+      ref: { attachmentId: 'sha256:att-1', mediaType: 'image/png', bytes: 1, width: 1, height: 1 },
+      data: Uint8Array.of(1, 2, 3),
     } as StoredImageAttachment)),
   } as never)
-  const append = vi.fn()
+  const cwd = mkdtempSync(join(tmpdir(), 'vision-bridge-test-'))
   const agent = {
     id: 'session-test',
     options: { provider: 'seed', model: 'seed-model' },
-    session: { append },
+    session: { header: { cwd }, append: vi.fn() },
     ctx,
   } as unknown as Agent
   const selection: ModelSelectionRef = { current: undefined, assembled: undefined }
   installModelSelection(agent.ctx, selection)
-  await ctx.plugin({ name, inject, Config, apply }, {
-    ...config.apiKey === undefined ? {} : { apiKey: config.apiKey },
-    apiKeyEnv: 'VISION_API_KEY',
-    ...config.baseURL === undefined ? {} : { baseURL: config.baseURL },
-    ...config.model === undefined ? {} : { model: config.model },
-  })
-  return { ctx, agent, selection, append }
+  await ctx.plugin({ name, inject, Config, apply }, {})
+  return { ctx, agent, selection, cwd }
 }
 
 /** Resolve the `imageDegradation` service without importing its runtime type. */
@@ -87,51 +77,53 @@ function serviceOf(ctx: Context): { isActive(): Promise<boolean> } {
 }
 
 describe('imageDegradation service', () => {
-  it('reports active only when endpoint, model, and key are all present', async () => {
-    const { ctx } = await harness({ apiKey: 'key', baseURL: 'https://vision', model: 'vl' })
+  it('is active while mounted: archiving needs no external credential', async () => {
+    const { ctx } = await harness()
     await expect(serviceOf(ctx).isActive()).resolves.toBe(true)
-    await ctx.fiber.dispose()
-  })
-
-  it('stays dormant without an apiKey', async () => {
-    const { ctx } = await harness({ baseURL: 'https://vision', model: 'vl' })
-    await expect(serviceOf(ctx).isActive()).resolves.toBe(false)
-    await ctx.fiber.dispose()
-  })
-
-  it('stays dormant without an endpoint or model', async () => {
-    const { ctx } = await harness({ apiKey: 'key', model: 'vl' })
-    await expect(serviceOf(ctx).isActive()).resolves.toBe(false)
     await ctx.fiber.dispose()
   })
 })
 
-describe('agent/pre-step degradation', () => {
-  it('replaces image blocks with vision descriptions when the model is text-only', async () => {
-    const fetchMock = vi.fn(() => Promise.resolve({
-      ok: true,
-      json: () => Promise.resolve({ choices: [{ message: { content: 'a screenshot of a chart' } }] }),
-    }))
-    vi.stubGlobal('fetch', fetchMock)
-    const { ctx, agent, append } = await harness({ apiKey: 'key', baseURL: 'https://vision', model: 'vl' })
+describe('agent/pre-step archiving', () => {
+  it('writes images to the workspace and replaces blocks with path text', async () => {
+    const { ctx, agent, cwd } = await harness()
     const messages = [imageMessage([{ type: 'image' }, { type: 'text', text: 'hi' }])]
 
     const decision = await runPreStep(ctx, agent, messages)
     expect(decision.kind).toBe('enter')
-    const degraded = (decision as { messages: UserMessage[] }).messages
-    expect(contentHasImage(degraded[0]!.content)).toBe(false)
-    expect(degraded[0]!.content[0]).toEqual({ type: 'text', text: '[图片描述] a screenshot of a chart' })
-    expect(fetchMock).toHaveBeenCalledOnce()
-    expect(append).toHaveBeenCalledWith(
-      'vision/describe',
-      expect.objectContaining({ attachmentId: 'att-1' }),
-    )
-    vi.unstubAllGlobals()
+    const archived = (decision as { messages: UserMessage[] }).messages
+    expect(contentHasImage(archived[0]!.content)).toBe(false)
+    const text = archived[0]!.content[0]!
+    expect(text.type).toBe('text')
+    const label = (text as { text: string }).text
+    // The path points under the session workspace's .dsh-images directory and
+    // carries a sanitized file name (the `sha256:` prefix loses its colon).
+    expect(label).toContain(join(cwd, '.dsh-images'))
+    expect(label).toContain('sha256_att-1.png')
+    expect(label).toContain('vision 技能')
+    // The image bytes really landed on disk as a plain file.
+    expect(existsSync(join(cwd, '.dsh-images', 'sha256_att-1.png'))).toBe(true)
+    await ctx.fiber.dispose()
+    rmSync(cwd, { recursive: true, force: true })
+  })
+
+  it('numbers multiple images and keeps the original text block', async () => {
+    const { ctx, agent } = await harness()
+    const messages = [imageMessage([
+      { type: 'image' }, { type: 'text', text: 'keep me' }, { type: 'image' },
+    ])]
+
+    const decision = await runPreStep(ctx, agent, messages)
+    const blocks = (decision as { messages: UserMessage[] }).messages[0]!.content
+    expect(blocks[0]!.type).toBe('text')
+    expect((blocks[0] as { text: string }).text).toContain('第 1/2 张')
+    expect(blocks[1]).toEqual({ type: 'text', text: 'keep me' })
+    expect((blocks[2] as { text: string }).text).toContain('第 2/2 张')
     await ctx.fiber.dispose()
   })
 
   it('keeps raw images for a vision-capable model', async () => {
-    const { ctx, agent, append } = await harness({ apiKey: 'key', baseURL: 'https://vision', model: 'vl' })
+    const { ctx, agent, cwd } = await harness()
     ;(ctx.get('llm') as unknown as { resolveModelInfo: ReturnType<typeof vi.fn> }).resolveModelInfo.mockResolvedValue({
       provider: 'p', id: 'm', name: 'M', inputModalities: ['text', 'image'],
     })
@@ -140,35 +132,24 @@ describe('agent/pre-step degradation', () => {
     const decision = await runPreStep(ctx, agent, messages)
     expect(decision.kind).toBe('enter')
     expect(contentHasImage((decision as { messages: UserMessage[] }).messages[0]!.content)).toBe(true)
-    expect(append).not.toHaveBeenCalled()
+    expect(existsSync(join(cwd, '.dsh-images', 'sha256_att-1.png'))).toBe(false)
     await ctx.fiber.dispose()
+    rmSync(cwd, { recursive: true, force: true })
   })
 
   it('judges the agent-scoped model selection, not the options snapshot', async () => {
-    const { ctx, agent, selection } = await harness({ apiKey: 'key', baseURL: 'https://vision', model: 'vl' })
+    const { ctx, agent, selection, cwd } = await harness()
     // The session was created on a vision-capable model, but the live
-    // selection moved to a text-only model: degradation must follow the
+    // selection moved to a text-only model: archiving must follow the
     // selection the admission check used.
     ;(agent as { options: { provider: string; model: string } }).options = { provider: 'seed', model: 'vision-model' }
     selection.current = { provider: 'p', model: 'text-only-model' }
-    ;(ctx.get('llm') as unknown as { resolveModelInfo: ReturnType<typeof vi.fn> }).resolveModelInfo.mockResolvedValue({
-      provider: 'p', id: 'm', name: 'M', inputModalities: ['text'],
-    })
 
     const messages = [imageMessage([{ type: 'image' }])]
     const decision = await runPreStep(ctx, agent, messages)
     expect(decision.kind).toBe('enter')
-    const degraded = (decision as { messages: UserMessage[] }).messages
-    expect(contentHasImage(degraded[0]!.content)).toBe(false)
+    expect(contentHasImage((decision as { messages: UserMessage[] }).messages[0]!.content)).toBe(false)
     await ctx.fiber.dispose()
-  })
-
-  it('stays dormant for a text-only model when the bridge is unconfigured', async () => {
-    const { ctx, agent, append } = await harness({ baseURL: 'https://vision', model: 'vl' })
-    const messages = [imageMessage([{ type: 'image' }])]
-    const decision = await runPreStep(ctx, agent, messages)
-    expect(decision).toEqual({ kind: 'enter', messages })
-    expect(append).not.toHaveBeenCalled()
-    await ctx.fiber.dispose()
+    rmSync(cwd, { recursive: true, force: true })
   })
 })
