@@ -413,6 +413,17 @@ export class SessionRuntime implements ISessions {
   }
 
   /**
+   * Subscribe to root-session idle edges (see the ISessions contract — the
+   * completion-alert seat). The subscription is manager-owned, so it survives
+   * connection generations; the caller's fiber owns the disposer.
+   * @param listener - edge callback carrying the root session id.
+   * @returns the disposer removing this listener.
+   */
+  onRootSessionIdle(listener: (sessionId: SessionId) => void): () => void {
+    return this.manager.onRootSessionIdle(listener)
+  }
+
+  /**
    * Clear the current selection so the layout shows the no-session empty
    * state (new-session affordance and the workspace preselection flow).
    * Wipes the persisted selection too — a reload stays on empty until the

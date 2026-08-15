@@ -96,6 +96,16 @@ export interface ISessions {
    */
   fork(opts: { sessionId: SessionId; atSeq?: number; increaseTitle?: boolean }): Promise<SessionId>
   /**
+   * Subscribe to root-session idle edges: a root (non-subagent) session's
+   * full idle predicate (not running, no pending interaction, no queued turn
+   * when an instance exists) turning false→true. Notified synchronously
+   * inside the object-layer mutation path (background-tab safe — microtask
+   * delivery). Consumers apply their own gates on top (e.g. document focus).
+   * @param listener - edge callback carrying the root session id.
+   * @returns the disposer removing this listener.
+   */
+  onRootSessionIdle(listener: (sessionId: SessionId) => void): () => void
+  /**
    * Register a per-session standard-props provider (hooks become `use<Name>`
    * selector hooks on the render side; props spread verbatim).
    * @param descriptor - static member roster plus per-session resolver.

@@ -230,7 +230,7 @@ function forwardedSettings(ns: string): HostFrame {
     type: 'host/remote-event',
     event: 'settings/document-updated',
     // The revision is the Host's own counter, so the matcher is the assertion.
-    args: [ns, expect.any(Number)], // oxlint-disable-line typescript/no-unsafe-assignment
+    args: [ns, expect.any(Number)],
   }
 }
 
@@ -353,12 +353,15 @@ describe('settings domain', () => {
     ctx.settings.register(settingsNamespace('web-search-deepseek'), z.object({
       baseURL: z.string(),
     }))
+    ctx.settings.register(settingsNamespace('ui-output-alert'), z.object({
+      enabled: z.boolean().default(true),
+    }))
     const api = createApiProxy(ctx, DEFAULTS)
 
     const value = expectOk(await api.settings.describe(request({})))
     expect(value.namespaces.map(view => view.ns)).toEqual([
       'llm-deepseek', 'permission', 'ui-theme', 'locale', 'ui-conversation',
-      'shell', 'agent-loop', 'web-search-deepseek',
+      'shell', 'agent-loop', 'web-search-deepseek', 'ui-output-alert',
     ])
     const permission = expectOk(await api.settings.mutate(request({
       ns: 'permission',
@@ -395,6 +398,11 @@ describe('settings domain', () => {
       ops: [{ op: 'set', path: ['baseURL'], value: 'https://search.test/v1' }],
     })))
     expect(webSearch.value).toEqual({ baseURL: 'https://search.test/v1' })
+    const outputAlert = expectOk(await api.settings.mutate(request({
+      ns: 'ui-output-alert',
+      ops: [{ op: 'set', path: ['enabled'], value: false }],
+    })))
+    expect(outputAlert.value).toEqual({ enabled: false })
 
     for (const response of [
       await api.settings.update(request({ ns: 'some-other-plugin', patch: { secretPath: '/etc/shadow' } })),

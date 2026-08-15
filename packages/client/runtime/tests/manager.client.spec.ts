@@ -1152,6 +1152,129 @@ describe('completed reminder', () => {
   })
 })
 
+describe('root-session idle edges', () => {
+  const status = (rpcId: string, sessionId: SessionId, running: boolean) => ({
+    rpcId: rpcId as never,
+    payload: { type: 'host/session-status' as const, sessionId, running },
+  })
+  const added = (rpcId: string, sessionId: SessionId) => ({
+    rpcId: rpcId as never,
+    payload: { type: 'host/session-added' as const, sessionId, blank: false },
+  })
+
+  it('notifies on the running→idle flip of a root session, once per edge, and stops after unsubscribe', () => {
+    const manager = new SessionManager(new FakeApiClient(), fakeRemote())
+    const edges: SessionId[] = []
+    const off = manager.onRootSessionIdle((id) => { edges.push(id) })
+    manager.handleHostEnvelope(added('h1', S1))
+    manager.handleHostEnvelope(status('s1', S1, true))
+    expect(edges).toEqual([]) // first observation of the idle state fires nothing
+    manager.handleHostEnvelope(status('s2', S1, false))
+    expect(edges).toEqual([S1])
+    manager.handleHostEnvelope(status('s3', S1, true))
+    manager.handleHostEnvelope(status('s4', S1, false))
+    expect(edges).toEqual([S1, S1])
+    off()
+    manager.handleHostEnvelope(status('s5', S1, true))
+    manager.handleHostEnvelope(status('s6', S1, false))
+    expect(edges).toEqual([S1, S1])
+  })
+
+  it('never fires for subagent-origin sessions', () => {
+    const manager = new SessionManager(new FakeApiClient(), fakeRemote())
+    const edges: SessionId[] = []
+    manager.onRootSessionIdle((id) => { edges.push(id) })
+    manager.handleHostEnvelope({
+      rpcId: 'h1' as never,
+      payload: { type: 'host/session-added' as const, sessionId: S1, blank: false, origin: 'subagent', parentSessionId: S2 },
+    })
+    manager.handleHostEnvelope(status('s1', S1, true))
+    manager.handleHostEnvelope(status('s2', S1, false))
+    expect(edges).toEqual([])
+  })
+
+  it('holds the edge while a pending interaction exists and fires when it resolves', () => {
+    const manager = new SessionManager(new FakeApiClient(), fakeRemote())
+    const edges: SessionId[] = []
+    manager.onRootSessionIdle((id) => { edges.push(id) })
+    manager.handleHostEnvelope(added('h1', S1))
+    manager.handleMuxEnvelope({
+      rpcId: 'a1' as never,
+      payload: { type: 'approval/requested', sessionId: S1, approvalId: 'ap1' as never, toolName: 'rm' },
+    })
+    manager.handleHostEnvelope(status('s1', S1, true))
+    manager.handleHostEnvelope(status('s2', S1, false))
+    expect(edges).toEqual([]) // the approval still waits on the user
+    manager.handleMuxEnvelope({
+      rpcId: 'a2' as never,
+      payload: { type: 'approval/resolved', sessionId: S1, approvalId: 'ap1' as never, outcome: 'allowed-once' },
+    })
+    expect(edges).toEqual([S1])
+  })
+
+  it('holds the edge while queued turns exist and fires when the queue drains', () => {
+    const manager = new SessionManager(new FakeApiClient(), fakeRemote())
+    const edges: SessionId[] = []
+    manager.onRootSessionIdle((id) => { edges.push(id) })
+    manager.handleHostEnvelope(added('h1', S1))
+    const session = manager.get(S1) // the queue mirror is instance-owned
+    manager.handleHostEnvelope(status('s1', S1, true))
+    manager.handleMuxEnvelope({
+      rpcId: 'q1' as never,
+      payload: { type: 'session/queue', sessionId: S1, items: [{
+        id: 'm1' as never,
+        placement: 'queued' as const,
+        message: {
+          id: 'm1' as never,
+          role: 'user',
+          content: [{ type: 'text', text: 'x' }],
+          source: { kind: 'user' as const, rpcId: 'r1' as never },
+        },
+      }] },
+    })
+    manager.handleHostEnvelope(status('s2', S1, false))
+    expect(edges).toEqual([]) // a queued turn still awaits the agent
+    manager.handleMuxEnvelope({ rpcId: 'q2' as never, payload: { type: 'session/queue', sessionId: S1, items: [] } })
+    expect(edges).toEqual([S1])
+    expect(session.getSnapshot().queue).toEqual([])
+  })
+
+  it('a list refresh carrying the running→idle transition notifies; sessions already idle at first observation do not', async () => {
+    const api = new FakeApiClient()
+    api.onList = () => Promise.resolve(ok({ items: [summary(S1, { updatedAt: 200, running: true })] as never[] }))
+    const manager = new SessionManager(api, fakeRemote())
+    const edges: SessionId[] = []
+    manager.onRootSessionIdle((id) => { edges.push(id) })
+    await manager.refreshList()
+    expect(edges).toEqual([]) // running at first observation
+    api.onList = () => Promise.resolve(ok({ items: [summary(S1, { updatedAt: 201 })] as never[] }))
+    await manager.refreshList()
+    expect(edges).toEqual([S1])
+    api.onList = () => Promise.resolve(ok({ items: [summary(S1, { updatedAt: 202 })] as never[] }))
+    await manager.refreshList()
+    expect(edges).toEqual([S1]) // already idle: no re-fire
+  })
+
+  it('reconnect re-seeds baselines so a pending clear cannot fire a false edge', async () => {
+    const api = new FakeApiClient()
+    api.onList = () => Promise.resolve(ok({ items: [summary(S1)] as never[] }))
+    const manager = new SessionManager(api, fakeRemote())
+    const edges: SessionId[] = []
+    manager.onRootSessionIdle((id) => { edges.push(id) })
+    manager.handleHostEnvelope(added('h1', S1))
+    manager.handleMuxEnvelope({
+      rpcId: 'a1' as never,
+      payload: { type: 'approval/requested', sessionId: S1, approvalId: 'ap1' as never, toolName: 'rm' },
+    })
+    manager.handleHostEnvelope(status('s1', S1, true))
+    // The connection dies while the approval waits; the generation clears the
+    // pending interaction, which must not look like a completion.
+    manager.handleDisconnected()
+    await manager.refreshList()
+    expect(edges).toEqual([])
+  })
+})
+
 describe('background-job mirror', () => {
   const view = (over: Partial<{ id: string; status: string; label: string }> = {}) => ({
     id: 'bash-1', kind: 'bash', label: 'pnpm run build', status: 'running', startedAt: 5, ...over,

@@ -122,6 +122,10 @@ export class SessionManager {
   private readonly completedNotifications = new Set<SessionId>()
   /** Last-observed running bits per session; the true→false edge here arms {@link completedNotifications}. */
   private readonly prevRunning = new Map<SessionId, boolean>()
+  /** Last-observed full idle predicate per session (see {@link syncIdleEdges}). */
+  private readonly prevIdle = new Map<SessionId, boolean>()
+  /** Root-session idle-edge listeners (the completion-alert seat; the UI feature applies its own away gate). */
+  private readonly idleListeners = new Set<(sessionId: SessionId) => void>()
   /** Per-session projection value stores, retained independently of instance arrival (the
    *  title-snapshot precedent, generalized): push frames land here whether or not the Session
    *  is instantiated (list rows read the 'title' key), and an instantiated Session adopts the
@@ -459,17 +463,24 @@ export class SessionManager {
           for (const s of baseline) {
             if (!this.prevRunning.has(s.sessionId)) this.prevRunning.set(s.sessionId, s.running)
           }
+          for (const s of baseline) {
+            if (!this.prevIdle.has(s.sessionId) && s.origin !== 'subagent') {
+              this.prevIdle.set(s.sessionId, this.idlePredicateOf(s))
+            }
+          }
           let summaries = baseline
           for (const mutation of mutations) {
             summaries = applyMutation(summaries, mutation)
             this.summaries = summaries
             this.syncCompletedNotifications()
+            this.syncIdleEdges()
           }
           this.summaries = summaries
           this.listState = 'idle'
           this.listPhase = 'ready'
           // Covers the empty-mutations pull (a plain baseline carries no edge).
           this.syncCompletedNotifications()
+          this.syncIdleEdges()
           // Push running/blank bits down to instantiated Sessions (the list is the authoritative summary source).
           for (const s of this.summaries) {
             const session = this.sessions.get(s.sessionId)
@@ -629,6 +640,7 @@ export class SessionManager {
     this.summaries = applyMutation(this.summaries, mutation)
     // Eager edge reconciliation — a snapshot-build-time pass would miss consecutive status frames.
     this.syncCompletedNotifications()
+    this.syncIdleEdges()
     this.notifier.markDirty()
   }
 
@@ -650,6 +662,21 @@ export class SessionManager {
   getListSnapshot(): SessionListSnapshot {
     this.notifier.ensureFresh()
     return this.listSnapshotCache
+  }
+
+  /**
+   * Subscribe to root-session idle edges (the completion-alert seat). A root
+   * (non-subagent) session's full idle predicate — not running, no pending
+   * interaction, no queued turn when an instance exists — turning false→true
+   * notifies the listener synchronously inside the mutation path, so a hidden
+   * tab still hears it (microtask delivery, never the rAF flush a background
+   * tab pauses). The UI feature applies its own away gate on top.
+   * @param listener - edge callback carrying the root session id.
+   * @returns the disposer removing this listener.
+   */
+  onRootSessionIdle(listener: (sessionId: SessionId) => void): () => void {
+    this.idleListeners.add(listener)
+    return () => { this.idleListeners.delete(listener) }
   }
 
   /** Add or refresh one stable pending-interaction identity. */
@@ -748,6 +775,13 @@ export class SessionManager {
     } else if (frame.type === 'question/resolved') {
       this.resolvePending(frame.sessionId, `q:${frame.questionRpcId}`)
     }
+    // Pending-interaction edges can complete the idle predicate without a list
+    // mutation; reconcile eagerly so a resolution while away fires the
+    // completion alert without waiting for the next status frame.
+    if (frame.type === 'approval/requested' || frame.type === 'approval/resolved'
+      || frame.type === 'question/requested' || frame.type === 'question/resolved') {
+      this.syncIdleEdges()
+    }
     const session = this.sessions.get(frame.sessionId)
     if (session === undefined) {
       // Answerable requests never hit history: retain each live identity until
@@ -786,6 +820,9 @@ export class SessionManager {
       }
     }
     session.handleMuxEnvelope(envelope.rpcId, frame)
+    // A queue-frame drain can complete the idle predicate without a status
+    // flip; reconcile so the edge fires as soon as the mirror empties.
+    if (frame.type === 'session/queue') this.syncIdleEdges()
   }
 
   /**
@@ -885,6 +922,11 @@ export class SessionManager {
    * request with its live rpcId.
   */
   handleDisconnected(): void {
+    // The pending clear below is not a completion, and the next generation's
+    // replay re-adds real pending work. Dropping the idle baselines re-seeds
+    // them on the next sync, so a reconnect cannot fire a false completion
+    // edge (a finish lost to a disconnect blip is accepted loss).
+    this.prevIdle.clear()
     if (this.pendingInteractions.size > 0) {
       this.pendingInteractions.clear()
       this.notifier.markDirty()
@@ -1015,6 +1057,55 @@ export class SessionManager {
     for (const id of this.completedNotifications) {
       if (!seen.has(id)) this.completedNotifications.delete(id)
     }
+  }
+
+  /**
+   * Reconcile root-session idle edges eagerly after every mutation, pull,
+   * pending-interaction change, and queue change (same cadence rule as
+   * {@link syncCompletedNotifications}: a snapshot-build-time pass would
+   * collapse consecutive status frames into one observation). A false→true
+   * flip of the full idle predicate on a root session notifies the
+   * {@link onRootSessionIdle} listeners. First observation only records the
+   * predicate — sessions already idle at load fire nothing.
+   */
+  private syncIdleEdges(): void {
+    const seen = new Set<SessionId>()
+    for (const s of this.summaries) {
+      if (s.origin === 'subagent') continue
+      seen.add(s.sessionId)
+      const idle = this.idlePredicateOf(s)
+      const prev = this.prevIdle.get(s.sessionId)
+      if (prev === undefined) {
+        this.prevIdle.set(s.sessionId, idle)
+        continue
+      }
+      if (!prev && idle) {
+        for (const fn of [...this.idleListeners]) {
+          try {
+            fn(s.sessionId)
+          } catch (error) {
+            // One throwing listener must not strand the mutation path.
+            console.error('session idle-edge listener failed:', error)
+          }
+        }
+      }
+      this.prevIdle.set(s.sessionId, idle)
+    }
+    for (const id of this.prevIdle.keys()) {
+      if (!seen.has(id)) this.prevIdle.delete(id)
+    }
+  }
+
+  /** The full idle predicate of one summary row (root-only filtering lives at the call sites). */
+  private idlePredicateOf(s: SessionSummary): boolean {
+    return !s.running && !this.pendingInteractions.has(s.sessionId)
+      && this.queueEmptyOrUnobserved(s.sessionId)
+  }
+
+  /** Queue emptiness of an instantiated Session; uninstantiated sessions count as empty (never delays an edge). */
+  private queueEmptyOrUnobserved(sessionId: SessionId): boolean {
+    const instance = this.sessions.get(sessionId)
+    return instance === undefined || instance.getSnapshot().queue.length === 0
   }
 
   private buildListSnapshot(): SessionListSnapshot {

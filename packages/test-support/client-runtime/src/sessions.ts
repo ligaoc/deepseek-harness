@@ -448,6 +448,25 @@ export class TestSessions implements ISessions {
     })
   }
 
+  /** Idle-edge listeners; benches drive edges through {@link TestSessions.fireRootSessionIdle}. */
+  private readonly rootIdleListeners = new Set<(sessionId: SessionId) => void>()
+
+  /**
+   * Subscribe to root-session idle edges (see the ISessions contract).
+   * @param listener - edge callback carrying the root session id.
+   * @returns the disposer removing this listener.
+   */
+  onRootSessionIdle(listener: (sessionId: SessionId) => void): () => void {
+    this.rootIdleListeners.add(listener)
+    return () => { this.rootIdleListeners.delete(listener) }
+  }
+
+  /** Drive one root-session idle edge through the listeners (test bench).
+   * @param sessionId - the root session id the edge carries. */
+  fireRootSessionIdle(sessionId: SessionId): void {
+    for (const listener of [...this.rootIdleListeners]) listener(sessionId)
+  }
+
   /** Clear the current selection (recorded; the production no-session flow). */
   clear(): void {
     this.calls.push({ method: 'clear', args: [] })
